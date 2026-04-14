@@ -13,7 +13,6 @@ def save_session_profile(profile: SessionProfile) -> None:
     SESSION_FILE.write_text(
         json.dumps(
             {
-                "base_url": profile.base_url,
                 "headers": profile.headers,
                 "cookie_jar": profile.cookie_jar,
             },

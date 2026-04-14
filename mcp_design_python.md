@@ -28,11 +28,10 @@
 ### Provider-Agnostic Package Strategy
 - Primary packages are model-agnostic: `mcp_apps/orchestrator` and `mcp_clients/agent_executor`.
 - Legacy provider-named folders were removed to keep one canonical path per category.
-- Provider selection is runtime-configured using env keys:
-  - `RESEARCH_PROVIDER` and `RESEARCH_API_URL`
-  - `PLANNER_PROVIDER` and `PLANNER_API_URL`
-  - `EXECUTOR_PROVIDER` and `EXECUTOR_API_URL`
-- Planner auth mode is runtime-configured using `PLANNER_AUTH_MODE` (for example: `api_key`, `oauth`, `playwright`).
+- LLM provider settings are owned by `mcp_servers/.env` so the server owns URLs, API keys, model IDs, and low-level generation limits.
+- Orchestrator and executor code call the server gateway instead of reading provider secrets locally.
+- OpenAI is called through the official Python SDK, Gemini is called through the direct Google Generative Language REST endpoint that matches the curl flow you shared, and Qwen is called through Hugging Face `InferenceClient` with a pooled, concurrent client layer.
+- Executor node spans must stay within `EXECUTOR_MAX_CONTEXT_LINES` so small-context models only receive small bounded slices.
 
 ### Phase 0 Playwright Session Bootstrap
 - Browser launches in headless mode and performs login to UI LLM endpoint.
@@ -43,6 +42,7 @@
   - required headers
   - body template mapping
   - retry and rate-limit settings
+- For SDK-backed providers, the server can build the session profile directly from server-owned env values without browser interception.
 
 ## 2) Strict Data Structures
 

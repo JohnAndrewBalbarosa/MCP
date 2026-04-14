@@ -13,7 +13,7 @@ This is NOT high-level documentation. You must produce a system design with impl
 Build an orchestration framework that routes coding tasks to specialized LLMs to optimize speed, context size, and accuracy:
 - **Research:** Handled by a dedicated, long-lived Research Agent instance.
 - **Planning & Scheduling:** Handled by a separate, long-lived Planner Agent instance.
-- **Execution (Developers):** Handled by multiple, dynamically spawned, ephemeral instances (e.g., Qwen via Hugging Face) that scale based on branch parallelization.
+- **Execution (Developers):** Handled by multiple, dynamically spawned, ephemeral instances (e.g., Qwen via Hugging Face InferenceClient) that scale based on branch parallelization.
 - **Tool Execution:** Handled strictly by isolated **MCP Servers** (e.g., FileSystem Server for reading/writing code).
 
 ---

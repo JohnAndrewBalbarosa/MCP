@@ -1,0 +1,6 @@
+# Root dependency set for the shared virtual environment.
+# Install with: pip install -r requirements.txt
+
+openai>=1.0.0
+google-genai>=1.0.0
+huggingface_hub>=0.25.0

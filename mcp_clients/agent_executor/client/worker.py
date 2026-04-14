@@ -2,24 +2,31 @@ from __future__ import annotations
 
 from mcp_clients.agent_executor.client.mcp_router import filesystem_apply, filesystem_get
 from mcp_clients.agent_executor.client.prompt_bounds import enforce_bounds
+from mcp_clients.agent_executor.libraries.providers.executor_provider_factory import select_executor_provider
 from mcp_clients.agent_executor.libraries.llm_api_wrappers.executor_provider import complete_mutation
+
+
+def _comment_block(text: str) -> str:
+    lines = text.splitlines() or [""]
+    return "\n".join(f"# {line}" for line in lines) + "\n"
 
 
 def _fake_mutation(snippet: str, intent: str) -> str:
     # Keep mutation behavior unchanged; provider call currently records selection metadata.
-    _ = complete_mutation(intent)
-    return f"# mutation_intent: {intent}\n" + snippet
+    generated = complete_mutation(intent)
+    return _comment_block(f"mutation_intent: {intent}") + _comment_block(f"model_response: {generated}") + snippet
 
 
 def execute_node(agent_id: str, graph, node_id: str) -> dict:
     node = graph.node_by_id[node_id]
+    selection = select_executor_provider()
     payload = {
         "target_file": node.target_file,
         "start_line": node.start_line,
         "end_line": node.end_line,
         "mutation_intent": node.mutation_intent,
     }
-    enforce_bounds(payload)
+    enforce_bounds(payload, max_span_lines=selection.max_context_lines)
 
     try:
         snippet = filesystem_get(node.target_file, node.start_line, node.end_line)

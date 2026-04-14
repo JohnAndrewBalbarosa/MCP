@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Python MCP orchestration scaffold with Y-section agent lifecycle"
 requires-python = ">=3.11"
 
-dependencies = []
+dependencies = [
+	"openai>=1.0.0",
+	"google-genai>=1.0.0",
+	"huggingface_hub>=0.25.0",
+]
 
 [tool.black]
 line-length = 100

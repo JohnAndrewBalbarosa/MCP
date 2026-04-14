@@ -5,12 +5,6 @@ from typing import Dict, List
 
 
 @dataclass
-class ProviderConfig:
-    provider_id: str
-    api_url: str
-
-
-@dataclass
 class ResearchBrief:
     objective: str
     constraints: List[str]
@@ -44,6 +38,5 @@ class DagGraph:
 
 @dataclass
 class SessionProfile:
-    base_url: str
     headers: Dict[str, str]
     cookie_jar: Dict[str, str]

@@ -1,0 +1,1 @@
+Test the MCP on a request that asks for generated code, a new folder/file plan, and a visible planner trace. Show the planner's text plan, Mermaid diagram, agent creation timeline, delegated commands, and keep all changes bounded to the sandbox workspace.
