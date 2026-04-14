@@ -1,0 +1,10 @@
+[project]
+name = "custom-mcp-orchestrator"
+version = "0.1.0"
+description = "Python MCP orchestration scaffold with Y-section agent lifecycle"
+requires-python = ">=3.11"
+
+dependencies = []
+
+[tool.black]
+line-length = 100
