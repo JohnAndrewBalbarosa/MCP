@@ -28,7 +28,13 @@ pip-wheel-metadata/
 
 # Testbed outputs
 mcp_testbed/output/
+mcp_testbed/workspace/tests/
 *.log
+
+# Extension packaging artifacts
+vscode-extension/node_modules/
+vscode-extension/*.vsix
+vscode-extension/out/
 
 # OS artifacts
 .DS_Store

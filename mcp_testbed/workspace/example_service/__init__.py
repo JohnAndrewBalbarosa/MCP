@@ -1,1 +1,0 @@
-"""Example service sample workspace package."""

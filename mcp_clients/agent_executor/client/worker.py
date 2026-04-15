@@ -6,15 +6,10 @@ from mcp_clients.agent_executor.libraries.providers.executor_provider_factory im
 from mcp_clients.agent_executor.libraries.llm_api_wrappers.executor_provider import complete_mutation
 
 
-def _comment_block(text: str) -> str:
-    lines = text.splitlines() or [""]
-    return "\n".join(f"# {line}" for line in lines) + "\n"
-
-
 def _fake_mutation(snippet: str, intent: str) -> str:
     # Keep mutation behavior unchanged; provider call currently records selection metadata.
-    generated = complete_mutation(intent)
-    return _comment_block(f"mutation_intent: {intent}") + _comment_block(f"model_response: {generated}") + snippet
+    complete_mutation(intent)
+    return snippet
 
 
 def execute_node(agent_id: str, graph, node_id: str) -> dict:

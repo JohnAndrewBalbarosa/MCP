@@ -1,1 +1,0 @@
-"""Service B sample workspace package."""

@@ -1,0 +1,49 @@
+{
+  "name": "parallel-coding-assistant",
+  "displayName": "Parallel Coding Assistant",
+  "description": "Run the MCP testbed against any workspace and choose batch or line-by-line command flow.",
+  "version": "0.1.0",
+  "publisher": "drew",
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:parallelCodingAssistant.run"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "parallelCodingAssistant.run",
+        "title": "Parallel Coding Assistant: Run"
+      }
+    ],
+    "configuration": {
+      "title": "Parallel Coding Assistant",
+      "properties": {
+        "parallelCodingAssistant.repoRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the MCP repo root that contains mcp_testbed/run_case.ps1"
+        },
+        "parallelCodingAssistant.defaultCommandPresentation": {
+          "type": "string",
+          "enum": [
+            "batch",
+            "line-by-line"
+          ],
+          "default": "batch",
+          "description": "Default command presentation mode"
+        },
+        "parallelCodingAssistant.defaultRequest": {
+          "type": "string",
+          "default": "Build a coding assistant MCP with built-in parallelism.",
+          "description": "Default request text used to seed the prompt"
+        }
+      }
+    }
+  }
+}
