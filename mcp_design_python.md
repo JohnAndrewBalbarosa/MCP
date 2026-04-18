@@ -16,22 +16,25 @@
    - get_snippet(file, start_line, end_line)
    - apply_snippet(file, start_line, end_line, replacement)
 5. FileSystem MCP server validates and performs deterministic splice.
-6. Worker returns a structured result to planner.
+6. Worker routes LLM calls through MCP client routing to the LLM server handler.
+7. LLM server handler delegates to agent entrypoint and vendor adapter modules.
+8. Worker returns a structured result to planner.
 
-### Environment Layering for Distributed Extensibility
-- Root `.env` contains shared defaults that all categories can inherit.
-- Category `.env` files (`mcp_apps/.env`, `mcp_clients/.env`, `mcp_servers/.env`) override root values only for that category.
-- Process environment variables override both layers at runtime.
-- Effective precedence: `process env > category .env > root .env`.
-- This enables deploying apps, clients, and servers on different machines with category-local URLs.
+### Shared Environment Configuration
+- Root `.env` is the single source of configuration for apps, clients, and servers.
+- Process environment variables override root `.env` values at runtime.
+- Effective precedence: `process env > root .env`.
+- This keeps endpoint routing and provider settings consistent across categories.
 
 ### Provider-Agnostic Package Strategy
-- Primary packages are model-agnostic: `mcp_apps/orchestrator` and `mcp_clients/agent_executor`.
+- Primary packages are vendor-neutral: `mcp_apps/orchestrator` and `mcp_clients/agent_executor`.
 - Legacy provider-named folders were removed to keep one canonical path per category.
-- LLM provider settings are owned by `mcp_servers/.env` so the server owns URLs, API keys, model IDs, and low-level generation limits.
-- Orchestrator and executor code call the server gateway instead of reading provider secrets locally.
-- OpenAI is called through the official Python SDK, Gemini is called through the direct Google Generative Language REST endpoint that matches the curl flow you shared, and Qwen is called through Hugging Face `InferenceClient` with a pooled, concurrent client layer.
-- Executor node spans must stay within `EXECUTOR_MAX_CONTEXT_LINES` so small-context models only receive small bounded slices.
+- LLM provider settings are stored in root `.env`, and consumed in server-side code paths.
+- Orchestrator and executor call the server gateway instead of reading provider secrets.
+- OpenAI and Gemini use official Python SDKs.
+- Qwen uses Hugging Face `InferenceClient` with pooled concurrent clients.
+- Executor node spans must stay within `EXECUTOR_MAX_CONTEXT_LINES`
+  so small-context models only receive bounded slices.
 
 ### Phase 0 Playwright Session Bootstrap
 - Browser launches in headless mode and performs login to UI LLM endpoint.

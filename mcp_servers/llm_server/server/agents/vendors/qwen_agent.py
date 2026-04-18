@@ -6,7 +6,7 @@ from typing import Dict, List
 
 try:
     from huggingface_hub import InferenceClient
-except ImportError:  # pragma: no cover - handled at runtime if dependency is missing
+except ImportError:  # pragma: no cover
     InferenceClient = None
 
 from mcp_servers.llm_server.libraries.types.contracts import ProviderRuntime
@@ -35,17 +35,16 @@ def _as_text(response: object) -> str:
 class QwenClientPool:
     def __init__(self, runtime: ProviderRuntime) -> None:
         if InferenceClient is None:
-            raise RuntimeError("Install huggingface_hub to enable the Qwen provider backend")
+            raise RuntimeError("Install huggingface_hub for Qwen provider backend")
 
-        client_count = max(1, runtime.max_parallel_instances)
-        model_ref = runtime.model
+        count = max(1, runtime.max_parallel_instances)
         self._runtime = runtime
         self._clients = [
-            InferenceClient(model=model_ref, token=runtime.api_key or None)
-            for _ in range(client_count)
+            InferenceClient(model=runtime.model, token=runtime.api_key or None)
+            for _ in range(count)
         ]
         self._client_lock = Lock()
-        self._semaphore = Semaphore(client_count)
+        self._semaphore = Semaphore(count)
         self._index = 0
 
     def _next_client(self):
@@ -74,11 +73,11 @@ class QwenClientPool:
             return list(pool.map(self.generate, prompts))
 
 
-_QWEN_POOLS: Dict[str, QwenClientPool] = {}
-_QWEN_POOLS_LOCK = Lock()
+_POOLS: Dict[str, QwenClientPool] = {}
+_POOLS_LOCK = Lock()
 
 
-def _qwen_pool_key(runtime: ProviderRuntime) -> str:
+def _pool_key(runtime: ProviderRuntime) -> str:
     return "|".join(
         [
             runtime.provider_id,
@@ -93,12 +92,12 @@ def _qwen_pool_key(runtime: ProviderRuntime) -> str:
 
 
 def get_pool(runtime: ProviderRuntime) -> QwenClientPool:
-    key = _qwen_pool_key(runtime)
-    with _QWEN_POOLS_LOCK:
-        pool = _QWEN_POOLS.get(key)
+    key = _pool_key(runtime)
+    with _POOLS_LOCK:
+        pool = _POOLS.get(key)
         if pool is None:
             pool = QwenClientPool(runtime)
-            _QWEN_POOLS[key] = pool
+            _POOLS[key] = pool
         return pool
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 try:
     from openai import OpenAI
-except ImportError:  # pragma: no cover - handled at runtime if dependency is missing
+except ImportError:  # pragma: no cover
     OpenAI = None
 
 from mcp_servers.llm_server.libraries.types.contracts import ProviderRuntime

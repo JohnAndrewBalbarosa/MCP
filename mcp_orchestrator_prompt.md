@@ -50,10 +50,13 @@ Design how the system controls context to ensure structural correctness in code 
 
 ## 3. Planning Phase & Task Graph
 
-- The Research Agent runs first and emits a structured research brief.
+- The Research Agent runs first and emits a structured research brief. It must dynamically identify the project's exact technology stack and ecosystem.
 - The Planner decomposes the feature request into a **Directed Acyclic Graph (DAG)**.
-- Each node contains exact metadata: `target_file`, `start_line`, `end_line`, and `mutation_intent`.
-
+- The DAG consists of two separate types of nodes:
+  - **Code Mutation Nodes:** Each contains exact metadata: `target_file`, `start_line`, `end_line`, and `mutation_intent`.
+  - **Terminal Command Nodes:** Terminal commands that must be executed at a specific stage (e.g., installing dependencies, building, or running specific tests like `npm run test`).
+- **Environment-Aware Commands (No Defaulting to Python):** Terminal commands must be accurately deduced from the actual project stack (e.g., package.json for Node.js, Cargo.toml for Rust). The Planner MUST NEVER default to, inject, or hallucinate Python/`pytest` commands unless the target codebase is actively recognized as a Python project.
+- **Interactive Execution Prompts:** For every Terminal Command Node in the DAG, the execution engine must halt and prompt the user in the console for permission before running: `Would you like to execute the command: "[insert command]"? (Y/N)`. Execution cannot proceed without explicit `Y` confirmation.
 ---
 
 ## 4. Codebase Architecture & System Initialization (Phase 0)
@@ -65,7 +68,9 @@ Crucially, the system includes a **Setup Phase (Phase 0)** using a headless brow
 - `/mcp_apps`: The Host Applications (Research Agent + Planner Agent + Scheduler).
 - `/mcp_clients`: The SDKs for Ephemeral Execution Agents.
 - `/mcp_servers`: Isolated microservices (e.g., FileSystem Server).
-- Libraries must live inside each category folder (`/mcp_apps/libraries`, `/mcp_clients/libraries`, `/mcp_servers/libraries`), not in a root shared folder.
+- Shared cross-category helpers may live in a root shared package if they are configuration-only and vendor-neutral.
+- Vendor-specific LLM implementations must stay inside `/mcp_servers`.
+- Configuration must come from a single root `.env`, with process environment overrides at runtime.
 
 ---
 

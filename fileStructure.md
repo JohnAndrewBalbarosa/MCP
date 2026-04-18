@@ -1,54 +1,94 @@
-Here is the corrected Python file structure with libraries grouped per MCP category.
+# MCP Workspace Structure
+
+This document reflects the current architecture and naming conventions.
+
+## Top-Level Layout
 
 /root
 |
-|-- .env                              # Shared defaults used by all MCP categories
+|-- .env                              # single shared configuration source
+|-- requirements.txt
+|-- pyproject.toml
+|-- mcp_design_python.md
+|-- mcp_orchestrator_prompt.md
+|-- fileStructure.md
+|
+|-- /mcp_shared
+|   `-- /config
+|       `-- env_loader.py             # shared root .env loader
 |
 |-- /mcp_apps
-|   |-- .env                          # App-only overrides (not used by clients/servers)
-|   |-- /orchestrator                 # Primary model-agnostic orchestrator package
-|   |   |-- /app
-|   |   |   |-- main.py
-|   |   |   |-- researcher.py         # Dedicated research agent entrypoint
-|   |   |   |-- planner.py
-|   |   |   |-- state_manager.py
-|   |   |   `-- orchestrator.py
-|   |   `-- /libraries
-|   |       |-- /auth                 # Auth adapter abstraction and provider routing
-|   |       |-- /config
-|   |       |-- /providers            # Research and planner provider selection factories
-|   |       `-- /types
+|   `-- /orchestrator
+|       |-- README.md
+|       |-- /app
+|       |   |-- main.py
+|       |   |-- orchestrator.py
+|       |   |-- planner.py
+|       |   |-- researcher.py
+|       |   |-- state_manager.py
+|       |   `-- trace_exporter.py
+|       `-- /libraries
+|           |-- /auth
+|           |-- /providers
+|           `-- /types
 |
 |-- /mcp_clients
-|   |-- .env                          # Client-only overrides and endpoints
-|   |-- /agent_executor               # Primary model-agnostic executor package
-|   |   |-- /client
-|   |   |   |-- agent_factory.py
-|   |   |   |-- mcp_router.py
-|   |   |   |-- prompt_bounds.py
-|   |   |   `-- worker.py
-|   |   `-- /libraries
-|   |       |-- /config
-|   |       |-- /providers            # Executor provider selection factory
-|   |       `-- /llm_api_wrappers
+|   `-- /agent_executor
+|       |-- README.md
+|       |-- /client
+|       |   |-- mcp_router.py
+|       |   |-- prompt_bounds.py
+|       |   `-- worker.py
+|       `-- /libraries
+|           `-- /types
+|       `-- /tools
+|           |-- README.md
+|           |-- flow_parser.py
+|           `-- response_parser.py
 |
 `-- /mcp_servers
-    |-- .env                          # Server-only bind URLs and server config
     |-- /filesystem_server
+    |   |-- README.md
     |   |-- /server
-    |   |   |-- index.py                 # MCP server transport and handlers
-    |   |   `-- file_mutator.py          # Deterministic line splice engine
-    |   |-- /libraries
-    |   |   `-- /types
-    |   |       `-- contracts.py
-    |   `-- README.md
+    |   |   |-- index.py
+    |   |   `-- file_mutator.py
+    |   `-- /libraries
+    |       `-- /types
     |
-    `-- /git_server
+    |-- /git_server
+    |   |-- README.md
+    |   |-- /server
+    |   |   `-- index.py
+    |   `-- /libraries
+    |       `-- /types
+    |
+    `-- /llm_server
         |-- /server
-        |   `-- index.py                 # MCP git operations wrapper
-        |-- /libraries
-        |   `-- /types
-        |       `-- contracts.py
-        `-- README.md
+        |   |-- index.py             # compatibility facade
+        |   |-- providers.py         # provider selection entry
+        |   |-- trace_logger.py
+        |   |-- /handlers
+        |   |   `-- llm_handler.py   # server handler layer
+        |   `-- /agents
+        |       |-- entrypoint.py    # server agent entrypoint
+        |       |-- /modules         # vendor-neutral agent modules
+        |       |   |-- defaults.py
+        |       |   |-- runtime_loader.py
+        |       |   `-- offline_fallback.py
+        |       `-- /vendors         # vendor-specific implementations
+        |           |-- registry.py
+        |           |-- openai_agent.py
+        |           |-- gemini_agent.py
+        |           `-- qwen_agent.py
+        `-- /libraries
+            `-- /types
 
-No root-level shared_libraries directory is used in this design.
+## LLM Request Path
+
+mcp_clients request -> mcp_servers llm handler -> agent entrypoint -> vendor module
+
+## Configuration Rules
+
+- Use root .env as the single configuration source.
+- Process environment variables override root .env values.
+- Keep vendor-specific keys and model settings consumed only by server-side code.

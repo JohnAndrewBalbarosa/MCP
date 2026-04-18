@@ -1,1 +1,0 @@
-Build a coding assistant MCP with built-in parallelism. It should plan source targets, workspace structure, terminal commands, and publish steps, then run multiple independent coding tasks at once while keeping all changes bounded to the sandbox workspace.

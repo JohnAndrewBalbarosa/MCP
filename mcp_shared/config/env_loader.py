@@ -19,13 +19,11 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
     return parsed
 
 
-def load_layered_env() -> Dict[str, str]:
-    here = Path(__file__).resolve()
-    root_env = here.parents[4] / ".env"
-    category_env = here.parents[3] / ".env"
+def load_env() -> Dict[str, str]:
+    repo_root = Path(__file__).resolve().parents[2]
+    root_env = repo_root / ".env"
 
     merged: Dict[str, str] = {}
     merged.update(_parse_env_file(root_env))
-    merged.update(_parse_env_file(category_env))
     merged.update(os.environ)
     return merged
