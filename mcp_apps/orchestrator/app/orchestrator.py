@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,10 +12,13 @@ from mcp_apps.orchestrator.app.planner import Planner
 from mcp_apps.orchestrator.app.researcher import ResearchAgent
 from mcp_apps.orchestrator.app.state_manager import StateManager
 from mcp_apps.orchestrator.app import trace_exporter
-from mcp_apps.orchestrator.libraries.auth.auth_adapter import bootstrap_planner_session
+from mcp_apps.orchestrator.libraries.auth.playwright_setup import bootstrap_planner_session
 from mcp_clients.agent_executor.client.worker import execute_node
 from mcp_clients.agent_executor.tools.flow_parser import build_flow_index, render_flow_report
 from mcp_apps.orchestrator.libraries.types.contracts import ResearchBrief, SessionProfile
+
+
+_COMMAND_WORKING_DIR: Path | None = None
 
 
 def _choose_next_ready_nodes(
@@ -52,6 +56,70 @@ def _compact_text(text: str, limit: int = 180) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return f"{collapsed[: limit - 3]}..."
+
+
+def _normalize_command_for_execution(command: str) -> str:
+    normalized = str(command).strip()
+    if not normalized:
+        return ""
+
+    match = re.search(
+        r"(?i)(\bcreate-next-app(?:@latest)?\b\s+)(\"[^\"]+\"|'[^']+'|\S+)(.*)",
+        normalized,
+    )
+    if not match:
+        return normalized
+
+    project_token = match.group(2).strip().strip('"').strip("'")
+    if not project_token or project_token.startswith("-") or project_token == ".":
+        return normalized
+
+    # Final safety net: do not use workspace label as create-next-app project folder.
+    if project_token.lower() == "workspace":
+        return f"{normalized[: match.start(2)]}.{normalized[match.end(2):]}"
+
+    safe = re.sub(r"[^a-z0-9._~-]", "-", project_token.strip().lower())
+    safe = re.sub(r"-+", "-", safe).strip("-.") or "app"
+    if safe == project_token:
+        return normalized
+    return f"{normalized[: match.start(2)]}{safe}{normalized[match.end(2):]}"
+
+
+def _is_valid_npm_package_name(name: str) -> bool:
+    candidate = name.strip()
+    if not candidate:
+        return False
+    if candidate.startswith(".") or candidate.startswith("_"):
+        return False
+    return re.match(r"^[a-z0-9][a-z0-9._~-]*$", candidate) is not None
+
+
+def _invalid_cwd_for_next_dot_target(command: str, cwd: Path) -> str | None:
+    normalized = str(command).strip()
+    if not normalized:
+        return None
+
+    match = re.search(
+        r"(?i)\bcreate-next-app(?:@latest)?\b\s+(\"[^\"]+\"|'[^']+'|\S+)",
+        normalized,
+    )
+    if not match:
+        return None
+
+    target = match.group(1).strip().strip('"').strip("'")
+    if target != ".":
+        return None
+
+    folder_name = cwd.name.strip()
+    if _is_valid_npm_package_name(folder_name):
+        return None
+
+    return (
+        "Cannot scaffold with create-next-app target '.' from this directory because "
+        f"its folder name '{folder_name}' is not a valid npm package name. "
+        "Use a lowercase workspace directory name (for example 'workspace') "
+        "or run create-next-app with an explicit valid target folder."
+    )
 
 
 def _is_supported_workspace_file(path: Path) -> bool:
@@ -123,7 +191,21 @@ def _file_preview(path: Path, max_lines: int = 24, max_chars: int = 1400) -> str
     return preview
 
 
+def _current_directory_entries(root: Path, max_entries: int = 60) -> List[str]:
+    entries: List[str] = []
+    try:
+        for path in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            marker = "/" if path.is_dir() else ""
+            entries.append(f"{path.name}{marker}")
+            if len(entries) >= max_entries:
+                break
+    except Exception:
+        return []
+    return entries
+
+
 def _scan_workspace_context(root: Path, max_files: int = 40) -> Dict[str, Any]:
+    cwd_entries = _current_directory_entries(root)
     files: List[Dict[str, str]] = []
     for path in sorted(root.rglob("*")):
         if len(files) >= max_files:
@@ -146,6 +228,7 @@ def _scan_workspace_context(root: Path, max_files: int = 40) -> Dict[str, Any]:
 
     return {
         "root": str(root),
+        "cwd_entries": cwd_entries,
         "file_count": len(files),
         "truncated": len(files) >= max_files,
         "files": files,
@@ -166,10 +249,43 @@ def _workspace_root() -> Path:
     return Path.cwd()
 
 
+def _active_command_working_dir() -> Path:
+    global _COMMAND_WORKING_DIR
+    if _COMMAND_WORKING_DIR is None:
+        _COMMAND_WORKING_DIR = Path.cwd().resolve()
+    return _COMMAND_WORKING_DIR
+
+
+def _apply_cd_command(command: str) -> str | None:
+    global _COMMAND_WORKING_DIR
+
+    match = re.match(r"^\s*cd\s+(.+?)\s*$", command, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    raw_target = match.group(1).strip().strip('"').strip("'")
+    if not raw_target:
+        return "cd command missing target path"
+
+    base = _active_command_working_dir()
+    candidate = Path(raw_target)
+    target = candidate if candidate.is_absolute() else (base / candidate)
+    target = target.resolve()
+
+    if not target.exists() or not target.is_dir():
+        return f"cd target does not exist: {target}"
+
+    _COMMAND_WORKING_DIR = target
+    return f"cwd changed to {target}"
+
+
 def _execute_local_command(agent_id: str, node) -> dict:
-    command = node.terminal_command or (
+    raw_command = node.terminal_command or (
         node.acceptance_checks[0] if node.acceptance_checks else ""
     )
+    command = _normalize_command_for_execution(raw_command)
+    if command and raw_command and command != raw_command:
+        node.terminal_command = command
     if not command:
         return {
             "ok": False,
@@ -197,13 +313,34 @@ def _execute_local_command(agent_id: str, node) -> dict:
                 "error": f"Command execution aborted by user: {command}",
             }
 
+    cd_result = _apply_cd_command(command)
+    if cd_result is not None:
+        return {
+            "ok": not cd_result.startswith("cd target does not exist") and not cd_result.startswith("cd command missing"),
+            "agent_id": agent_id,
+            "node_id": node.node_id,
+            "status": "DONE" if not cd_result.startswith("cd target does not exist") and not cd_result.startswith("cd command missing") else "FAILED",
+            "summary": cd_result,
+            "error": cd_result if cd_result.startswith("cd target does not exist") or cd_result.startswith("cd command missing") else "",
+        }
+
+    working_dir = _active_command_working_dir()
+    invalid_cwd_message = _invalid_cwd_for_next_dot_target(command, working_dir)
+    if invalid_cwd_message:
+        return {
+            "ok": False,
+            "agent_id": agent_id,
+            "node_id": node.node_id,
+            "error": invalid_cwd_message,
+        }
+
     try:
         completed = subprocess.run(
             command,
             shell=True,
             capture_output=True,
             text=True,
-            cwd=str(_workspace_root()),
+            cwd=str(working_dir),
             check=True,
         )
         summary = " ".join(
@@ -366,6 +503,7 @@ def run_orchestrator(user_request: str) -> None:
             graph,
             command_mode,
             research_brief=research_brief,
+            workspace_context=workspace_context,
         )
     )
     print("\n=== Flow Parser ===")
@@ -402,6 +540,7 @@ def run_orchestrator(user_request: str) -> None:
             graph,
             command_mode,
             research_brief=research_brief,
+            workspace_context=workspace_context,
         ),
     )
     trace_exporter.write_text("planner/command_mode.txt", command_mode)

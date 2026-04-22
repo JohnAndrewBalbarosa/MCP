@@ -35,7 +35,12 @@ def load_runtime(role: str) -> ProviderRuntime:
     model = env.get(f"{prefix}_MODEL", default_model(provider_id, prefix))
     api_key = env.get(f"{prefix}_API_KEY", "")
 
-    max_output_tokens = _int_env(env, f"{prefix}_MAX_OUTPUT_TOKENS", 1024)
+    default_max_output_tokens = 2048 if prefix in {"RESEARCH", "PLANNER"} else 1024
+    max_output_tokens = _int_env(
+        env,
+        f"{prefix}_MAX_OUTPUT_TOKENS",
+        default_max_output_tokens,
+    )
     temperature = _float_env(env, f"{prefix}_TEMPERATURE", 0.2)
     top_p = _float_env(env, f"{prefix}_TOP_P", 0.95)
     max_parallel_instances = _int_env(env, f"{prefix}_MAX_PARALLEL_INSTANCES", 4)

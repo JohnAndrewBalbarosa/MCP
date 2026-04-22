@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from mcp_clients.agent_executor.client.mcp_router import (
+    enforce_bounds,
     filesystem_apply,
     filesystem_get,
     llm_describe_runtime,
     llm_generate_text,
 )
-from mcp_clients.agent_executor.client.prompt_bounds import enforce_bounds
 from mcp_clients.agent_executor.tools.response_parser import (
     render_compact_summary,
     strip_code_fences,

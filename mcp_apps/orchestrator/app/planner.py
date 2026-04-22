@@ -3,16 +3,46 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from mcp_clients.agent_executor.client.mcp_router import llm_generate_text
+from mcp_clients.agent_executor.client.mcp_router import (
+    llm_describe_runtime,
+    llm_generate_text,
+)
 from mcp_apps.orchestrator.libraries.types.contracts import DagGraph, DagNode, ResearchBrief
+
+
+PLANNER_PROMPT_TEMPLATE = (
+    Path(__file__).resolve().parent / "prompts" / "planner_prompt.txt"
+)
 
 
 @dataclass
 class Planner:
     """Builds a deterministic DAG with strict line-bounded mutation nodes."""
+
+    def _render_planner_prompt_template(
+        self,
+        request: str,
+        research_brief: ResearchBrief,
+        workspace_block: str,
+        lifecycle_block: str,
+    ) -> str:
+        try:
+            template = PLANNER_PROMPT_TEMPLATE.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"Planner prompt template missing: {PLANNER_PROMPT_TEMPLATE}"
+            ) from exc
+
+        return (
+            template.replace("__WORKSPACE_BLOCK__", workspace_block)
+            .replace("__USER_REQUEST__", request)
+            .replace("__RESEARCH_BRIEF__", self._describe_research_brief(research_brief))
+            .replace("__LIFECYCLE_BLOCK__", lifecycle_block)
+        )
 
     def _workspace_tree_from_paths(self, paths: List[str]) -> dict[str, dict]:
         tree: dict[str, dict] = {}
@@ -32,6 +62,7 @@ class Planner:
         if not workspace_context:
             return "workspace_root: unavailable"
 
+        cwd_entries = workspace_context.get("cwd_entries", [])
         files = workspace_context.get("files", [])
         file_paths = [
             str(item.get("path", "")).strip()
@@ -41,6 +72,10 @@ class Planner:
         tree = self._workspace_tree_from_paths(file_paths)
 
         lines = [f"workspace_root: {workspace_context.get('root', '')}"]
+        if cwd_entries:
+            lines.append("cwd_entries:")
+            for item in cwd_entries:
+                lines.append(f"- {item}")
         lines.append(f"file_count: {workspace_context.get('file_count', len(file_paths))}")
         if workspace_context.get("truncated"):
             lines.append("note: workspace scan truncated")
@@ -99,67 +134,11 @@ class Planner:
             lifecycle_block = "  (tech stack unknown — infer from request)\n"
 
         workspace_block = self.describe_workspace_context(workspace_context)
-
-        return (
-            "You are the planner for a model-context-protocol coding orchestrator.\n"
-            "Return STRICT JSON only — no prose, no markdown fences — "
-            "with exactly these keys:\n"
-            "  graph_id, created_at, nodes, command_nodes\n\n"
-            "The Planner must generate a deterministic DAG from the "
-            "research brief and workspace scan.\n"
-            "=== WORKSPACE CONTEXT (scan of the launch directory) ===\n"
-            f"{workspace_block}\n\n"
-            "=== AGENT NODES (key: 'nodes') ===\n"
-            "Each agent node = ONE file to create or edit. Use REAL file paths for the project.\n"
-            "NEVER use placeholder names like 'example_service', "
-            "'svc_a', 'svc_b', or 'handler.py'.\n"
-            "Derive paths from the user request and tech stack.\n"
-            "Good examples: 'src/index.js', 'backend/app.py', 'components/Login.jsx',\n"
-            "  'public/index.html', 'routes/auth.js', 'models/user.py', 'styles/main.css'\n"
-            "Required fields per agent node:\n"
-            "  node_id              - short label: A, B, C, D...\n"
-            "  status               - 'READY' if depends_on=[], else 'BLOCKED'\n"
-            "  depends_on           - list of node_ids that must finish first\n"
-            "  next                 - list of node_ids that follow this one\n"
-            "  target_file          - REAL relative path matching the project structure\n"
-            "  start_line           - 1 for a new file; realistic offset for partial edits\n"
-            "  end_line             - estimated end line (e.g. 80 for a medium new file)\n"
-            "  mutation_intent      - specific description "
-            "of what to write/change in this file\n"
-            "  acceptance_checks    - [] or list of validation commands\n"
-            "  branch_key           - parallel group label "
-            "('setup', 'frontend', 'backend', etc.)\n"
-            "  outgoing_flow_count  - len(next)\n"
-            "  incoming_flow_count  - len(depends_on)\n"
-            "  task_type            - always 'agent'\n"
-            "  terminal_command     - always ''\n\n"
-            "=== COMMAND NODES (key: 'command_nodes') ===\n"
-            "One command node per terminal command. "
-            "ONLY use commands listed in the lifecycle block\n"
-            "below — absolutely never invent commands, git operations, or publish steps.\n"
-            "Command nodes run SEQUENTIALLY and ALL must complete "
-            "before any agent node starts.\n"
-            "Required fields: node_id (CMD-01, CMD-02...), status ('READY' or 'BLOCKED'),\n"
-            "  depends_on, next, task_type='command', terminal_command (exact shell command),\n"
-            "  command_scope ('repo' or 'workspace'), mutation_intent, acceptance_checks=[],\n"
-            "  branch_key='command-flow', target_file='', start_line=0, end_line=0,\n"
-            "  outgoing_flow_count, incoming_flow_count\n\n"
-            "=== DAG RULES ===\n"
-            "- No cycles.\n"
-            "- Nodes sharing the same depends_on parent run "
-            "IN PARALLEL (different branch_keys).\n"
-            "- status='READY' only when depends_on is empty, otherwise 'BLOCKED'.\n"
-            "- NEVER add git, pytest, pip, or any command not in the research brief.\n\n"
-            "Return a single JSON object only. "
-            "No comments, no markdown, no explanatory text.\n"
-            "Use empty arrays for missing lists.\n"
-            "Example shape: {\"graph_id\":\"...\","
-            "\"created_at\":\"...\",\"nodes\":[...],"
-            "\"command_nodes\":[...]}\n\n"
-            f"User request:\n{request}\n\n"
-            f"Research brief:\n{self._describe_research_brief(research_brief)}\n\n"
-            "Lifecycle commands from Research Agent "
-            f"(command_nodes source — use ONLY these):\n{lifecycle_block}"
+        return self._render_planner_prompt_template(
+            request=request,
+            research_brief=research_brief,
+            workspace_block=workspace_block,
+            lifecycle_block=lifecycle_block,
         )
 
     def _planner_repair_prompt(
@@ -252,7 +231,170 @@ class Planner:
                 return False
         return True
 
+    def _executor_max_context_lines(self) -> int:
+        try:
+            runtime = llm_describe_runtime("EXECUTOR")
+            return max(1, int(runtime.max_context_lines))
+        except Exception:
+            return 16
+
+    def _normalize_agent_bounds(self, graph: DagGraph) -> None:
+        max_span = self._executor_max_context_lines()
+        for node in graph.nodes:
+            if node.task_type == "command":
+                continue
+
+            if node.start_line < 1:
+                node.start_line = 1
+            if node.end_line < node.start_line:
+                node.end_line = node.start_line
+
+            span = node.end_line - node.start_line + 1
+            if span > max_span:
+                node.end_line = node.start_line + max_span - 1
+
+    def _workspace_known_paths(self, workspace_context: Dict[str, Any] | None) -> set[str]:
+        if not workspace_context:
+            return set()
+
+        known: set[str] = set()
+        for entry in workspace_context.get("cwd_entries", []):
+            item = str(entry).strip().rstrip("/").lower()
+            if item:
+                known.add(item)
+
+        for file_info in workspace_context.get("files", []):
+            raw = str(file_info.get("path", "")).strip().strip("/")
+            if not raw:
+                continue
+            lowered = raw.lower()
+            known.add(lowered)
+            parts = [part for part in lowered.split("/") if part]
+            for index in range(1, len(parts)):
+                known.add("/".join(parts[:index]))
+
+        return known
+
+    def _looks_like_next_workspace(self, workspace_context: Dict[str, Any] | None) -> bool:
+        known = self._workspace_known_paths(workspace_context)
+        if not known:
+            return False
+
+        required_any = {
+            "app/page.tsx",
+            "app/layout.tsx",
+            "next.config.js",
+            "next.config.mjs",
+            "next.config.ts",
+            "package.json",
+        }
+        return any(path in known for path in required_any)
+
+    def _sanitize_npm_project_token(self, token: str) -> str:
+        lowered = token.strip().lower()
+        sanitized = re.sub(r"[^a-z0-9._~-]", "-", lowered)
+        sanitized = re.sub(r"-+", "-", sanitized).strip("-.")
+        return sanitized or "app"
+
+    def _normalize_command_text(self, command: str) -> str:
+        normalized = str(command).strip()
+        if not normalized:
+            return ""
+
+        match = re.search(
+            r"(?i)(\bcreate-next-app(?:@latest)?\b\s+)(\"[^\"]+\"|'[^']+'|\S+)(.*)",
+            normalized,
+        )
+        if not match:
+            return normalized
+
+        project_token = match.group(2)
+        prefix = normalized[: match.start(2)]
+        suffix = normalized[match.end(2) :]
+        stripped_token = project_token.strip().strip('"').strip("'")
+
+        if not stripped_token:
+            return normalized
+
+        if stripped_token.startswith("-") or stripped_token == ".":
+            return normalized
+
+        # `workspace` is the execution root label, not a project directory name.
+        if stripped_token.lower() == "workspace":
+            return f"{prefix}.{suffix}"
+
+        safe_name = self._sanitize_npm_project_token(stripped_token)
+        if safe_name == stripped_token:
+            return normalized
+
+        return f"{prefix}{safe_name}{suffix}"
+
+    def _is_scaffold_command(self, command: str) -> bool:
+        lowered = command.lower()
+        return (
+            "create-next-app" in lowered
+            or "npm create" in lowered
+            or "npm init" in lowered
+            or "npx create-" in lowered
+        )
+
+    def _should_skip_command_for_workspace(
+        self,
+        command: str,
+        workspace_context: Dict[str, Any] | None,
+    ) -> bool:
+        lowered = command.lower()
+        known = self._workspace_known_paths(workspace_context)
+        if not known:
+            return False
+
+        if "create-next-app" in lowered and self._looks_like_next_workspace(workspace_context):
+            return True
+
+        if "npm init" in lowered and "package.json" in known:
+            return True
+
+        return False
+
+    def _enforce_command_first_execution(self, graph: DagGraph) -> None:
+        if not graph.command_nodes:
+            return
+
+        command_ids = {node.node_id for node in graph.command_nodes}
+
+        for index, node in enumerate(graph.command_nodes):
+            previous = [graph.command_nodes[index - 1].node_id] if index > 0 else []
+            following = [graph.command_nodes[index + 1].node_id] if index < len(graph.command_nodes) - 1 else []
+            node.depends_on = previous
+            node.next = following
+            node.status = "READY" if not previous else "BLOCKED"
+            node.task_type = "command"
+            if not node.command_scope:
+                node.command_scope = "workspace"
+
+        last_command_id = graph.command_nodes[-1].node_id
+
+        for node in graph.nodes:
+            node.task_type = "agent"
+            non_command_deps = [dep for dep in node.depends_on if dep not in command_ids]
+            if last_command_id not in non_command_deps:
+                node.depends_on = [last_command_id, *non_command_deps]
+            else:
+                node.depends_on = non_command_deps
+
+            node.next = [next_id for next_id in node.next if next_id not in command_ids]
+            node.status = "READY" if not node.depends_on else "BLOCKED"
+
+        starter_agents = [node.node_id for node in graph.nodes if len(node.depends_on) == 1 and node.depends_on[0] == last_command_id]
+        graph.command_nodes[-1].next = starter_agents
+
     def _finalize_graph(self, graph: DagGraph) -> DagGraph:
+        for command_node in graph.command_nodes:
+            command_node.terminal_command = self._normalize_command_text(
+                command_node.terminal_command or ""
+            )
+        self._enforce_command_first_execution(graph)
+        self._normalize_agent_bounds(graph)
         graph.normalize_flow_counts()
         return graph
 
@@ -361,14 +503,170 @@ class Planner:
             lines.append(f"{' ' * indent}{filename}")
         return lines
 
+    def _collect_terminal_commands(
+        self,
+        research_brief: ResearchBrief,
+        workspace_context: Dict[str, Any] | None = None,
+    ) -> List[str]:
+        ordered_candidates = [
+            *research_brief.setup_commands,
+            *research_brief.run_commands,
+            *research_brief.test_commands,
+        ]
+
+        unique_commands: List[str] = []
+        seen: set[str] = set()
+        for command in ordered_candidates:
+            normalized = self._normalize_command_text(command)
+            if not normalized or normalized in seen:
+                continue
+            if self._should_skip_command_for_workspace(normalized, workspace_context):
+                continue
+            seen.add(normalized)
+            unique_commands.append(normalized)
+        return unique_commands
+
+    def _build_command_nodes(self, commands: List[str]) -> List[DagNode]:
+        if not commands:
+            return []
+
+        command_nodes: List[DagNode] = []
+        for index, command in enumerate(commands, start=1):
+            node_id = f"CMD-{index:02d}"
+            depends_on = [f"CMD-{index - 1:02d}"] if index > 1 else []
+            next_nodes = [f"CMD-{index + 1:02d}"] if index < len(commands) else []
+            command_nodes.append(
+                DagNode(
+                    node_id=node_id,
+                    status="READY" if not depends_on else "BLOCKED",
+                    depends_on=depends_on,
+                    next=next_nodes,
+                    target_file="",
+                    start_line=0,
+                    end_line=0,
+                    mutation_intent=f"Execute command: {command}",
+                    acceptance_checks=[],
+                    branch_key="command-flow",
+                    task_type="command",
+                    terminal_command=command,
+                    command_scope="workspace",
+                )
+            )
+
+        return command_nodes
+
+    def _default_targets_from_brief(self, research_brief: ResearchBrief) -> List[str]:
+        extracted: List[str] = []
+        for item in research_brief.recommended_structure:
+            candidate = str(item).strip().strip("/")
+            if not candidate:
+                continue
+            if candidate.endswith("/"):
+                continue
+            if "." not in Path(candidate).name:
+                continue
+            if candidate not in extracted:
+                extracted.append(candidate)
+
+        if extracted:
+            return extracted[:6]
+
+        stack = research_brief.tech_stack.lower()
+        if "next.js" in stack or "react" in stack:
+            return [
+                "app/page.tsx",
+                "app/layout.tsx",
+                "app/globals.css",
+                "package.json",
+                "next.config.js",
+            ]
+        if "laravel" in stack or "php" in stack:
+            return [
+                "routes/web.php",
+                "app/Http/Controllers/HomeController.php",
+                "resources/views/welcome.blade.php",
+                "composer.json",
+            ]
+        if "fastapi" in stack or "python" in stack:
+            return [
+                "app/main.py",
+                "app/routes/health.py",
+                "requirements.txt",
+            ]
+        return [
+            "src/index.js",
+            "src/routes/index.js",
+            "package.json",
+        ]
+
+    def _fallback_plan(
+        self,
+        request: str,
+        research_brief: ResearchBrief,
+        workspace_context: Dict[str, Any] | None = None,
+    ) -> DagGraph:
+        commands = self._collect_terminal_commands(
+            research_brief,
+            workspace_context=workspace_context,
+        )
+        command_nodes = self._build_command_nodes(commands)
+        targets = self._default_targets_from_brief(research_brief)
+
+        trigger_depends_on: List[str] = []
+        if command_nodes:
+            trigger_depends_on = [command_nodes[-1].node_id]
+
+        nodes: List[DagNode] = []
+        for index, target in enumerate(targets, start=1):
+            node_id = chr(ord("A") + index - 1)
+            depends_on = list(trigger_depends_on) if index == 1 else [nodes[-1].node_id]
+            next_nodes: List[str] = []
+            if index < len(targets):
+                next_nodes = [chr(ord("A") + index)]
+
+            nodes.append(
+                DagNode(
+                    node_id=node_id,
+                    status="READY" if not depends_on else "BLOCKED",
+                    depends_on=depends_on,
+                    next=next_nodes,
+                    target_file=target,
+                    start_line=1,
+                    end_line=80,
+                    mutation_intent=(
+                        f"Implement requested behavior for {target} based on: {request.strip()}"
+                    ),
+                    acceptance_checks=[],
+                    branch_key="fallback-plan",
+                    task_type="agent",
+                    terminal_command="",
+                    command_scope="workspace",
+                )
+            )
+
+        if command_nodes and nodes:
+            command_nodes[-1].next = [nodes[0].node_id]
+
+        graph = DagGraph(
+            graph_id="planner-fallback",
+            nodes=nodes,
+            command_nodes=command_nodes,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        return self._finalize_graph(graph)
+
     def describe_terminal_commands(
         self,
         graph: DagGraph,
         command_mode: str = "batch",
         research_brief: ResearchBrief | None = None,
+        workspace_context: Dict[str, Any] | None = None,
     ) -> str:
         if research_brief is not None:
-            unique_commands = self._collect_terminal_commands(research_brief)
+            unique_commands = self._collect_terminal_commands(
+                research_brief,
+                workspace_context=workspace_context,
+            )
         else:
             # Fallback: read from command_nodes already on graph
             unique_commands = [
@@ -437,15 +735,34 @@ class Planner:
         )
         last_response = ""
 
-        for _attempt in range(2):
+        for _attempt in range(3):
             response = llm_generate_text("PLANNER", prompt)
             last_response = response
             graph = self._graph_from_response(response)
             if graph is not None and self._is_valid_graph(graph):
                 if not graph.command_nodes:
                     graph.command_nodes = self._build_command_nodes(
-                        self._collect_terminal_commands(research_brief)
+                        self._collect_terminal_commands(
+                            research_brief,
+                            workspace_context=workspace_context,
+                        )
                     )
+                else:
+                    normalized_commands: List[str] = []
+                    for command_node in graph.command_nodes:
+                        normalized = self._normalize_command_text(
+                            command_node.terminal_command or ""
+                        )
+                        if not normalized:
+                            continue
+                        if self._should_skip_command_for_workspace(
+                            normalized,
+                            workspace_context=workspace_context,
+                        ):
+                            continue
+                        normalized_commands.append(normalized)
+
+                    graph.command_nodes = self._build_command_nodes(normalized_commands)
                 return self._finalize_graph(graph)
 
             prompt = self._planner_repair_prompt(
@@ -455,9 +772,10 @@ class Planner:
                 response,
             )
 
-        raise RuntimeError(
-            "Planner did not return valid JSON after retries. "
-            f"Last response: {last_response}"
+        return self._fallback_plan(
+            request,
+            research_brief,
+            workspace_context=workspace_context,
         )
 
     def plan_parallel_coding_assistant(
