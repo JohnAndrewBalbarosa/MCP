@@ -19,17 +19,22 @@ def build_flow_index(graph) -> Dict[str, FlowNodeMeta]:
     flow_index: Dict[str, FlowNodeMeta] = {}
 
     for node in graph.nodes:
-        incoming = len(node.depends_on)
-        outgoing = len(node.next)
+        incoming = node.incoming_flow_count or len(node.depends_on)
+        outgoing = node.outgoing_flow_count or len(node.next)
         is_merge = incoming > 1
         is_branch = outgoing > 1
 
         branch_parent = False
         if incoming == 1:
             parent = graph.node_by_id[node.depends_on[0]]
-            branch_parent = len(parent.next) > 1
+            branch_parent = (parent.outgoing_flow_count or len(parent.next)) > 1
 
-        requires_new_executor = incoming == 0 or is_merge or branch_parent
+        requires_new_executor = bool(
+            getattr(node, "requires_fresh_agent", False)
+            or incoming == 0
+            or is_merge
+            or branch_parent
+        )
         flow_index[node.node_id] = FlowNodeMeta(
             node_id=node.node_id,
             incoming_edges=incoming,

@@ -75,6 +75,10 @@ class DagNode:
     task_type: str = "agent"
     terminal_command: str = ""
     command_scope: str = "workspace"
+    parallel_group: str = ""
+    merge_role: str = "linear"
+    requires_fresh_agent: bool = False
+    handoff_strategy: str = "reuse"
 
 
 @dataclass
@@ -110,6 +114,10 @@ class DagGraph:
                     "task_type": node.task_type,
                     "terminal_command": node.terminal_command,
                     "command_scope": node.command_scope,
+                    "parallel_group": node.parallel_group,
+                    "merge_role": node.merge_role,
+                    "requires_fresh_agent": node.requires_fresh_agent,
+                    "handoff_strategy": node.handoff_strategy,
                 }
                 for node in self.nodes
             ],
@@ -130,6 +138,10 @@ class DagGraph:
                     "task_type": node.task_type,
                     "terminal_command": node.terminal_command,
                     "command_scope": node.command_scope,
+                    "parallel_group": node.parallel_group,
+                    "merge_role": node.merge_role,
+                    "requires_fresh_agent": node.requires_fresh_agent,
+                    "handoff_strategy": node.handoff_strategy,
                 }
                 for node in self.command_nodes
             ],
@@ -174,6 +186,10 @@ class DagGraph:
                         or raw_node.get("command")
                         or ""
                     ),
+                    parallel_group=str(raw_node.get("parallel_group", "")),
+                    merge_role=str(raw_node.get("merge_role") or "linear"),
+                    requires_fresh_agent=bool(raw_node.get("requires_fresh_agent", False)),
+                    handoff_strategy=str(raw_node.get("handoff_strategy") or "reuse"),
                 )
             )
 
@@ -222,6 +238,10 @@ class DagGraph:
                         or ""
                     ),
                     command_scope=str(raw_node.get("command_scope") or "workspace"),
+                    parallel_group=str(raw_node.get("parallel_group", "")),
+                    merge_role=str(raw_node.get("merge_role") or "linear"),
+                    requires_fresh_agent=bool(raw_node.get("requires_fresh_agent", False)),
+                    handoff_strategy=str(raw_node.get("handoff_strategy") or "reuse"),
                 )
             )
 

@@ -21,7 +21,11 @@ class StateManager:
         for node in self.graph.nodes:
             if node.status != "BLOCKED":
                 continue
-            if all(self.graph.node_by_id[dep].status == "DONE" for dep in node.depends_on):
+            finished_adjacent = sum(
+                1 for dep in node.depends_on if self.graph.node_by_id[dep].status == "DONE"
+            )
+            required = node.incoming_flow_count or len(node.depends_on)
+            if finished_adjacent >= required:
                 node.status = "READY"
                 ready.append(node.node_id)
         return ready

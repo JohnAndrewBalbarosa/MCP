@@ -11,12 +11,12 @@ def strip_code_fences(text: str) -> str:
     return cleaned.strip()
 
 
-def _python_function_summaries(source: str) -> List[str]:
-    summaries: List[str] = []
+def _python_function_headers(source: str) -> List[Dict[str, str]]:
+    headers: List[Dict[str, str]] = []
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return summaries
+        return headers
 
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -24,9 +24,20 @@ def _python_function_summaries(source: str) -> List[str]:
 
         doc = ast.get_docstring(node) or "No docstring"
         first_line = doc.splitlines()[0].strip() if doc.strip() else "No docstring"
-        summaries.append(f"{node.name}: {first_line}")
+        inputs = [arg.arg for arg in node.args.args]
+        output = "return value"
+        if node.returns is not None:
+            output = ast.unparse(node.returns)
+        headers.append(
+            {
+                "name": node.name,
+                "description": first_line,
+                "input": ", ".join(inputs) if inputs else "none",
+                "output": output,
+            }
+        )
 
-    return summaries
+    return headers
 
 
 def summarize_generated_code(
@@ -34,17 +45,25 @@ def summarize_generated_code(
     mutation_intent: str,
     replacement: str,
 ) -> Dict[str, object]:
-    functions = _python_function_summaries(replacement)
-    if not functions:
-        function_count = 0
-    else:
-        function_count = len(functions)
+    function_headers = _python_function_headers(replacement)
+    function_count = len(function_headers)
+    function_summaries = [
+        f"{header['name']}: {header['description']}"
+        for header in function_headers
+    ]
 
     return {
         "target_file": target_file,
         "mutation_intent": mutation_intent,
         "function_count": function_count,
-        "function_summaries": functions,
+        "function_summaries": function_summaries,
+        "function_headers": function_headers,
+        "known_inputs": [header["input"] for header in function_headers if header.get("input")],
+        "known_outputs": [header["output"] for header in function_headers if header.get("output")],
+        "known_constraints": [],
+        "branch_summary": (
+            f"Applied mutation for {target_file} with {function_count} parsed function(s)"
+        ),
         "replacement_head": " ".join(replacement.split())[:180],
     }
 

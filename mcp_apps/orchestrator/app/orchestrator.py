@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 from mcp_apps.orchestrator.app.planner import Planner
 from mcp_apps.orchestrator.app.researcher import ResearchAgent
 from mcp_apps.orchestrator.app.state_manager import StateManager
+from mcp_apps.orchestrator.app.context_compactor import compact_branch_context
 from mcp_apps.orchestrator.app import trace_exporter
 from mcp_apps.orchestrator.libraries.auth.playwright_setup import bootstrap_planner_session
 from mcp_clients.agent_executor.client.worker import execute_node
@@ -556,7 +557,11 @@ def run_orchestrator(user_request: str) -> None:
     parallel_waves: List[str] = []
     node_agent_map: Dict[str, str] = {}
     active_agents: set[str] = set()
-    file_summaries: Dict[str, List[str]] = {}
+    file_summaries: Dict[str, List[dict]] = {}
+    node_compactions: Dict[str, dict] = {}
+    agent_fork_origin: Dict[str, str] = {}
+    fork_agent_stats: Dict[str, Dict[str, Any]] = {}
+    compaction_events: List[Dict[str, Any]] = []
     next_agent_number = 1
 
     def next_agent_id() -> str:
@@ -572,17 +577,67 @@ def run_orchestrator(user_request: str) -> None:
     def activate_agent(agent_id: str) -> None:
         active_agents.add(agent_id)
 
+    def _fork_origin_for_node(node_id: str) -> str | None:
+        node = graph.node_by_id[node_id]
+        if len(node.depends_on) != 1:
+            return None
+        parent = graph.node_by_id[node.depends_on[0]]
+        if (getattr(parent, "outgoing_flow_count", 0) or len(parent.next)) > 1:
+            return parent.node_id
+        return None
+
+    def _register_fork_spawn(agent_id: str, node_id: str) -> None:
+        fork_origin = _fork_origin_for_node(node_id)
+        if not fork_origin:
+            return
+        agent_fork_origin[agent_id] = fork_origin
+        stats = fork_agent_stats.setdefault(
+            fork_origin,
+            {"generated": 0, "retired": 0, "children": [], "branch_width": graph.node_by_id[fork_origin].outgoing_flow_count},
+        )
+        stats["generated"] += 1
+        if node_id not in stats["children"]:
+            stats["children"].append(node_id)
+
     def retire_agent(agent_id: str, reason: str) -> None:
         if agent_id in active_agents:
             active_agents.remove(agent_id)
             record(f"retire {agent_id} | reason={reason}")
+        fork_origin = agent_fork_origin.get(agent_id)
+        if fork_origin:
+            stats = fork_agent_stats.setdefault(
+                fork_origin,
+                {"generated": 0, "retired": 0, "children": [], "branch_width": graph.node_by_id[fork_origin].outgoing_flow_count},
+            )
+            stats["retired"] += 1
 
     def abstraction_context_for_node(node_id: str) -> List[str]:
         node = graph.node_by_id[node_id]
-        if not node.target_file:
-            return []
-        entries = file_summaries.get(node.target_file, [])
-        return entries[-6:]
+        context_items: List[str] = []
+        for dep_id in node.depends_on:
+            packet = node_compactions.get(dep_id)
+            if not packet:
+                continue
+            ground_truth = str(packet.get("next_agent_ground_truth", "")).strip()
+            if ground_truth:
+                context_items.append(ground_truth)
+
+        if node.target_file:
+            entries = file_summaries.get(node.target_file, [])
+            context_items.extend(
+                str(entry.get("next_agent_ground_truth", "")).strip()
+                for entry in entries[-6:]
+                if str(entry.get("next_agent_ground_truth", "")).strip()
+            )
+
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for item in context_items:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped[-6:]
 
     def select_executor_for_node(node_id: str) -> tuple[str, bool]:
         node = graph.node_by_id[node_id]
@@ -599,7 +654,7 @@ def run_orchestrator(user_request: str) -> None:
             activate_agent(merged_agent)
             return merged_agent, True
 
-        if meta.requires_new_executor:
+        if getattr(node, "requires_fresh_agent", False) or meta.requires_new_executor:
             fresh_agent = next_agent_id()
             register_agent(fresh_agent)
             activate_agent(fresh_agent)
@@ -704,6 +759,7 @@ def run_orchestrator(user_request: str) -> None:
                 node = graph.node_by_id[node_id]
                 agent_id, spawned = select_executor_for_node(node_id)
                 if spawned:
+                    _register_fork_spawn(agent_id, node_id)
                     delegated = _format_delegated_command(node)
                     record(
                         f"spawn {agent_id} for node {node_id} "
@@ -754,12 +810,31 @@ def run_orchestrator(user_request: str) -> None:
                     node_agent_map[node_id] = agent_id
 
                     summary_text = response.get("artifact_summary_text", "")
-                    if (
-                        isinstance(summary_text, str)
-                        and summary_text.strip()
-                        and node.target_file
-                    ):
-                        file_summaries.setdefault(node.target_file, []).append(summary_text)
+                    artifact_summary = response.get("artifact_summary", {})
+                    if node.target_file and isinstance(artifact_summary, dict):
+                        handoff_packet = compact_branch_context(
+                            node_id=node_id,
+                            target_file=node.target_file,
+                            branch_outputs=[summary_text] if isinstance(summary_text, str) and summary_text.strip() else [node_summary],
+                            artifact_summary=artifact_summary,
+                            node_metadata={
+                                "requires_fresh_agent": getattr(node, "requires_fresh_agent", False),
+                                "merge_role": getattr(node, "merge_role", "linear"),
+                                "incoming_flow_count": getattr(node, "incoming_flow_count", 0),
+                            },
+                            artifact_snapshot=str(artifact_summary.get("replacement_head", "")),
+                        )
+                        node_compactions[node_id] = handoff_packet
+                        file_summaries.setdefault(node.target_file, []).append(handoff_packet)
+                        compaction_events.append(
+                            {
+                                "node_id": node_id,
+                                "target_file": node.target_file,
+                                "requires_fresh_agent": handoff_packet.get("requires_fresh_agent", False),
+                                "function_header_count": len(handoff_packet.get("function_headers", [])),
+                                "summary": handoff_packet.get("branch_summary", ""),
+                            }
+                        )
                         record(f"summary {agent_id} -> {node.target_file}")
 
                     if not node.next:
@@ -779,7 +854,41 @@ def run_orchestrator(user_request: str) -> None:
     for file_path, summaries in sorted(file_summaries.items()):
         abstraction_lines.append(f"- {file_path}")
         for summary in summaries:
-            abstraction_lines.append(f"  {summary}")
+            abstraction_lines.append(
+                f"  {summary.get('next_agent_ground_truth', '').strip()}"
+            )
     trace_exporter.write_text("planner/abstraction_summaries.txt", "\n".join(abstraction_lines))
+
+    fork_lines = ["Fork Agent Report:"]
+    if not fork_agent_stats:
+        fork_lines.append("none")
+    else:
+        for fork_node, stats in sorted(fork_agent_stats.items()):
+            active_count = max(0, int(stats["generated"]) - int(stats["retired"]))
+            children = ", ".join(stats.get("children", [])) or "none"
+            fork_lines.append(
+                f"- {fork_node}: generated={stats['generated']} retired={stats['retired']} "
+                f"active={active_count} branch_width={stats.get('branch_width', 0)} children={children}"
+            )
+    print("\n=== Fork Agent Report ===")
+    print("\n".join(fork_lines))
+    trace_exporter.write_text("planner/fork_agent_report.txt", "\n".join(fork_lines))
+    trace_exporter.write_text("planner/fork_agent_report.json", json.dumps(fork_agent_stats, indent=2))
+
+    compaction_lines = ["Compaction Report:"]
+    if not compaction_events:
+        compaction_lines.append("none")
+    else:
+        for event in compaction_events:
+            compaction_lines.append(
+                f"- node={event['node_id']} file={event['target_file']} "
+                f"fresh_agent={event['requires_fresh_agent']} "
+                f"function_headers={event['function_header_count']} "
+                f"summary={event['summary']}"
+            )
+    print("\n=== Compaction Report ===")
+    print("\n".join(compaction_lines))
+    trace_exporter.write_text("planner/compaction_report.txt", "\n".join(compaction_lines))
+    trace_exporter.write_text("planner/compaction_report.json", json.dumps(compaction_events, indent=2))
     emit_timeline()
     print("Parallel coding assistant execution complete.")

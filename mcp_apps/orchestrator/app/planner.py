@@ -11,6 +11,7 @@ from mcp_clients.agent_executor.client.mcp_router import (
     llm_describe_runtime,
     llm_generate_text,
 )
+from mcp_apps.orchestrator.app.dag_builder import build_dag
 from mcp_apps.orchestrator.libraries.types.contracts import DagGraph, DagNode, ResearchBrief
 
 
@@ -201,20 +202,30 @@ class Planner:
         except json.JSONDecodeError:
             return None
 
-    def _graph_from_response(self, response: str) -> DagGraph | None:
+    def _graph_from_response(
+        self,
+        response: str,
+        research_brief: ResearchBrief,
+        workspace_context: Dict[str, Any] | None,
+    ) -> DagGraph | None:
         payload = self._extract_json_object(response)
         if payload is None:
             return None
 
         try:
-            graph = DagGraph.from_dict(payload)
+            graph = build_dag(
+                payload,
+                workspace_context=workspace_context,
+                research_brief=research_brief,
+                executor_max_span_lines=self._executor_max_context_lines(),
+            )
         except Exception:
             return None
 
         if not graph.nodes:
             return None
 
-        return self._finalize_graph(graph)
+        return graph
 
     def _is_valid_graph(self, graph: DagGraph) -> bool:
         if not graph.nodes:
@@ -394,9 +405,17 @@ class Planner:
                 command_node.terminal_command or ""
             )
         self._enforce_command_first_execution(graph)
-        self._normalize_agent_bounds(graph)
-        graph.normalize_flow_counts()
-        return graph
+        return build_dag(
+            graph,
+            workspace_context=None,
+            research_brief=ResearchBrief(
+                objective="",
+                constraints=[],
+                assumptions=[],
+                risks=[],
+            ),
+            executor_max_span_lines=self._executor_max_context_lines(),
+        )
 
     def describe_parallel_waves(self, graph: DagGraph) -> str:
         depth_cache: dict[str, int] = {}
@@ -738,7 +757,11 @@ class Planner:
         for _attempt in range(3):
             response = llm_generate_text("PLANNER", prompt)
             last_response = response
-            graph = self._graph_from_response(response)
+            graph = self._graph_from_response(
+                response,
+                research_brief=research_brief,
+                workspace_context=workspace_context,
+            )
             if graph is not None and self._is_valid_graph(graph):
                 if not graph.command_nodes:
                     graph.command_nodes = self._build_command_nodes(
