@@ -21,6 +21,11 @@ from mcp_apps.orchestrator.libraries.types.contracts import ResearchBrief, Sessi
 
 _COMMAND_WORKING_DIR: Path | None = None
 
+_MAX_PREVIEW_LINES = 24
+_MAX_PREVIEW_CHARS = 1_400
+_MAX_DIR_ENTRIES   = 60
+_MAX_SCAN_FILES    = 40
+
 
 def _choose_next_ready_nodes(
     state: StateManager,
@@ -179,7 +184,7 @@ def _should_skip_workspace_path(path: Path, root: Path) -> bool:
     return False
 
 
-def _file_preview(path: Path, max_lines: int = 24, max_chars: int = 1400) -> str:
+def _file_preview(path: Path, max_lines: int = _MAX_PREVIEW_LINES, max_chars: int = _MAX_PREVIEW_CHARS) -> str:
     try:
         content = path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
@@ -192,7 +197,7 @@ def _file_preview(path: Path, max_lines: int = 24, max_chars: int = 1400) -> str
     return preview
 
 
-def _current_directory_entries(root: Path, max_entries: int = 60) -> List[str]:
+def _current_directory_entries(root: Path, max_entries: int = _MAX_DIR_ENTRIES) -> List[str]:
     entries: List[str] = []
     try:
         for path in sorted(root.iterdir(), key=lambda p: p.name.lower()):
@@ -205,7 +210,7 @@ def _current_directory_entries(root: Path, max_entries: int = 60) -> List[str]:
     return entries
 
 
-def _scan_workspace_context(root: Path, max_files: int = 40) -> Dict[str, Any]:
+def _scan_workspace_context(root: Path, max_files: int = _MAX_SCAN_FILES) -> Dict[str, Any]:
     cwd_entries = _current_directory_entries(root)
     files: List[Dict[str, str]] = []
     for path in sorted(root.rglob("*")):
@@ -420,6 +425,8 @@ def _format_research_brief_text(research_brief: ResearchBrief) -> str:
 
 
 def run_orchestrator(user_request: str) -> None:
+    global _COMMAND_WORKING_DIR
+
     # Phase 0 remains the same behavior through provider adapter indirection.
     try:
         profile = bootstrap_planner_session()
@@ -434,9 +441,12 @@ def run_orchestrator(user_request: str) -> None:
         f"Captured planner session profile with {len(profile.headers)} headers."
     )
 
+    workspace_root = _workspace_root().resolve()
+    _COMMAND_WORKING_DIR = workspace_root
+
     researcher = ResearchAgent()
     research_brief = researcher.research(user_request)
-    workspace_context = _scan_workspace_context(Path.cwd())
+    workspace_context = _scan_workspace_context(workspace_root)
 
     planner = Planner()
     graph = planner.plan(user_request, research_brief, workspace_context=workspace_context)

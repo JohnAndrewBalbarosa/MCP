@@ -31,6 +31,9 @@ mcp_testbed/output/
 mcp_testbed/workspace/tests/
 *.log
 
+# Generated workspace — demo runs, traces, and scenario outputs
+Workspace/
+
 # Extension packaging artifacts
 vscode-extension/node_modules/
 vscode-extension/*.vsix
